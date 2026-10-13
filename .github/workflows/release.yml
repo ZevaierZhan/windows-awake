@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag matching Cargo.toml (for example v0.2.0)'
+        description: 'Release tag matching Cargo.toml (for example v0.3.0)'
         required: true
-        default: v0.2.0
+        default: v0.3.0
         type: string
   push:
     tags: ['v*']
@@ -53,7 +53,8 @@ jobs:
       - name: Package and checksum
         shell: pwsh
         run: |
-          Compress-Archive -LiteralPath 'dist/WindowsAwake.exe','README.md' -DestinationPath 'dist/WindowsAwake-windows-x64.zip'
+          Copy-Item -LiteralPath 'assets/ink/ATTRIBUTION.md' -Destination 'dist/INK-ATTRIBUTION.md'
+          Compress-Archive -LiteralPath 'dist/WindowsAwake.exe','README.md','dist/INK-ATTRIBUTION.md' -DestinationPath 'dist/WindowsAwake-windows-x64.zip'
           $lines = foreach ($asset in @('dist/WindowsAwake.exe','dist/WindowsAwake-windows-x64.zip')) {
             $hash = Get-FileHash -LiteralPath $asset -Algorithm SHA256
             '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $asset)

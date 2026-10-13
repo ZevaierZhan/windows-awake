@@ -45,7 +45,10 @@ impl Config {
                 "--idle-seconds"
                 | "--grass-delay-seconds"
                 | "--grass-grow-seconds"
-                | "--grass-hold-seconds" => {
+                | "--grass-hold-seconds"
+                | "--ink-delay-seconds"
+                | "--ink-grow-seconds"
+                | "--ink-hold-seconds" => {
                     let value: u32 = args
                         .next()
                         .ok_or("缺少时间参数")?
@@ -56,8 +59,12 @@ impl Config {
                     }
                     match arg.as_str() {
                         "--idle-seconds" => c.idle_seconds = value,
-                        "--grass-delay-seconds" => c.grass_delay_seconds = value,
-                        "--grass-grow-seconds" => c.grass_grow_seconds = value,
+                        "--grass-delay-seconds" | "--ink-delay-seconds" => {
+                            c.grass_delay_seconds = value
+                        }
+                        "--grass-grow-seconds" | "--ink-grow-seconds" => {
+                            c.grass_grow_seconds = value
+                        }
                         _ => c.grass_hold_seconds = value,
                     }
                 }

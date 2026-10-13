@@ -5,6 +5,8 @@ mod config;
 #[cfg(test)]
 mod display_probe;
 mod grass;
+mod ink_asset;
+mod ink_gpu;
 mod monitor;
 mod platform;
 #[cfg(test)]
@@ -29,7 +31,7 @@ const TOGGLE: u32 = 100;
 const POWER_ONLY: u32 = 101;
 const EXIT: u32 = 102;
 const STATUS: u32 = 103;
-const HELP: &str = "Windows Awake 0.2\n\n仅接电且无人操作时进入保活。默认：空闲30秒→仅保活30秒→四角长草120秒→满屏停留30秒→支持DDC/CI则熄屏。\n任意鼠标/键盘输入立即取消流程并点亮，无需快捷键。\nRDP、其他程序模拟输入、音频输出/活动音频会话时不接管。\n模拟输入排除会持续到一次本机物理输入。\n\n参数：--idle-seconds N --grass-delay-seconds N --grass-grow-seconds N --grass-hold-seconds N\n--power-only 仅保活不长草/熄屏，不注入输入\n--paused --run-for-seconds N\n右键托盘：暂停/状态/退出。";
+const HELP: &str = "Windows Awake 0.3\n\n仅接电且无人操作时进入保活。默认：空闲30秒→仅保活30秒→四角水墨扩散120秒→满屏停留30秒→支持DDC/CI则熄屏。\n任意鼠标/键盘输入立即取消流程并点亮，无需快捷键。\nRDP、其他程序模拟输入、音频输出/活动音频会话时不接管。\n模拟输入排除会持续到一次本机物理输入。\n\n参数：--idle-seconds N --ink-delay-seconds N --ink-grow-seconds N --ink-hold-seconds N\n--power-only 仅防休眠，无水墨动画/熄屏，不注入输入\n--paused --run-for-seconds N\n右键托盘：暂停/状态/退出。";
 thread_local! {static APP:RefCell<Option<App>>=const{RefCell::new(None)};}
 struct App {
     config: Config,
@@ -165,7 +167,7 @@ impl App {
             }
             if next == Phase::Growing || next == Phase::FullGrass {
                 if self.visual_error.is_none() && self.grass.is_none() {
-                    match grass::Grass::new() {
+                    match grass::Grass::new(self.config.grass_grow_seconds) {
                         Ok(g) => self.grass = Some(g),
                         Err(e) => {
                             log(&e);
@@ -174,13 +176,21 @@ impl App {
                     }
                 }
                 if let Some(g) = self.grass.as_mut() {
-                    g.update(progress);
+                    if let Err(e) = g.update(progress) {
+                        self.visual_error = Some(e);
+                        self.grass = None;
+                        next = Phase::KeepAlive;
+                    }
                 } else {
                     next = Phase::KeepAlive;
                 }
             }
             if next == Phase::ScreenOff {
-                self.grass = None;
+                if let Some(g) = self.grass.as_mut()
+                    && let Err(e) = g.update(1.0)
+                {
+                    self.visual_error = Some(e);
+                }
                 if self.visual_error.is_some() {
                     next = Phase::KeepAlive;
                 } else if !self.off_attempted && self.monitors.is_none() {
@@ -197,6 +207,9 @@ impl App {
                         }
                     }
                 }
+                // Keep the last ink frame visible during the DDC command so the
+                // desktop does not flash bright just before hardware screen-off.
+                self.grass = None;
             }
             // Own synthetic events never change the real-input timeline. No pulse after takeover.
             if next.keeps_awake()
@@ -263,8 +276,10 @@ impl App {
             match self.phase {
                 Phase::Standby => "用户活动/等待空闲".into(),
                 Phase::KeepAlive => "仅保活".into(),
-                Phase::Growing => format!("四角长草 {:.0}%（透明度渐变）", self.progress * 100.),
-                Phase::FullGrass => "草地已长满，等待熄屏".into(),
+                Phase::Growing => {
+                    format!("四角水墨扩散 {:.0}%（透明度渐变）", self.progress * 100.)
+                }
+                Phase::FullGrass => "水墨已覆盖全屏，等待熄屏".into(),
                 Phase::ScreenOff => {
                     if self.monitors.is_some() {
                         "熄屏保活（任意输入点亮）".into()
@@ -356,7 +371,7 @@ fn popup(hwnd: HWND) {
             menu,
             MF_STRING | if power_only { MF_CHECKED } else { 0 },
             POWER_ONLY as usize,
-            wide("仅防休眠（无草地/无输入注入）").as_ptr(),
+            wide("仅防休眠（无水墨/无输入注入）").as_ptr(),
         );
         AppendMenuW(menu, MF_STRING, STATUS as usize, wide("查看状态").as_ptr());
         AppendMenuW(menu, MF_STRING, EXIT as usize, wide("退出").as_ptr());
@@ -622,11 +637,22 @@ fn run(config: Config) -> Result<(), String> {
 }
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().is_some_and(|a| a == "--grass-preview") {
+    if args.first().is_some_and(|a| {
+        matches!(
+            a.as_str(),
+            "--grass-preview" | "--ink-preview" | "--ink-preview-frames"
+        )
+    }) {
         let result = args
             .get(1)
             .ok_or("缺少预览文件路径".to_string())
-            .and_then(|path| grass::preview(path).map_err(|e| e.to_string()));
+            .and_then(|path| {
+                if args[0] == "--ink-preview-frames" {
+                    grass::preview_frames(path)
+                } else {
+                    grass::preview(path)
+                }
+            });
         if let Err(e) = result {
             message(&e, true);
             std::process::exit(2);
