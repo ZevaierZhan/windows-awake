@@ -1,0 +1,78 @@
+name: Release Windows EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag matching Cargo.toml (for example v0.1.0)'
+        required: true
+        default: v0.1.0
+        type: string
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw 'Invalid release tag'
+          }
+          $manifest = Get-Content Cargo.toml -Raw
+          if ($manifest -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Package version missing' }
+          $packageVersion = $Matches[1]
+          if ($env:RELEASE_TAG -ne "v$packageVersion") { throw 'Release tag must match Cargo.toml version' }
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build EXE
+        run: ./scripts/build.ps1
+      - name: Package and checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath 'dist/WindowsAwake.exe','README.md' -DestinationPath 'dist/WindowsAwake-windows-x64.zip'
+          $lines = foreach ($asset in @('dist/WindowsAwake.exe','dist/WindowsAwake-windows-x64.zip')) {
+            $hash = Get-FileHash -LiteralPath $asset -Algorithm SHA256
+            '{0}  {1}' -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $asset)
+          }
+          $lines | Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Encoding utf8
+      - name: Save build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-awake-windows-x64
+          path: |
+            dist/WindowsAwake.exe
+            dist/WindowsAwake-windows-x64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create $env:RELEASE_TAG 'dist/WindowsAwake.exe' 'dist/WindowsAwake-windows-x64.zip' 'dist/SHA256SUMS.txt' --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Windows Awake $env:RELEASE_TAG" --notes-file '.github/RELEASE_NOTES.md'
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed' }
