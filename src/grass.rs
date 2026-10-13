@@ -346,6 +346,13 @@ mod tests {
                 .iter()
                 .all(|pixel| pixel[3] == 255)
         );
+        let quarter = image(0.25);
+        assert_eq!(
+            quarter[((36 * 128 + 64) * 4) + 3],
+            0,
+            "Centre must stay uncovered early in the transition"
+        );
+        assert!(quarter[3] > 0, "Ink must start at the corners");
         let a = image(0.45);
         let b = image(0.451);
         let change: f32 = a

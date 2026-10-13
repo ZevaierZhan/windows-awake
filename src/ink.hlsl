@@ -23,7 +23,11 @@ float4 ps(Vertex v) : SV_TARGET {
         float2 a = ink.Sample(linearBorder, float3(uv, c*2));
         float2 b = ink.Sample(linearBorder, float3(uv, c*2+1));
         float2 sample = lerp(a, b, fraction[c]);
-        float alpha = sample.x;
+        // Advance a soft spatial frontier over the full configured duration.
+        // The original fast pour is the texture detail inside that moving frontier.
+        float distance = length(q*float2(timing.z,1)) / (0.5*sqrt(timing.z*timing.z+1));
+        float edge = 1-smoothstep(p*1.15-0.10,p*1.15+0.10,distance);
+        float alpha = sample.x*edge;
         float density = saturate(sample.y / 0.32);
         float3 pigment = lerp(float3(0.010,0.033,0.041), float3(0.060,0.190,0.210), density);
         float4 plume = float4(pigment*alpha, alpha);
