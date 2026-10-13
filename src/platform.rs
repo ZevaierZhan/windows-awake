@@ -8,8 +8,10 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     System::{
-        Power::*, RemoteDesktop::*, StationsAndDesktops::*, SystemInformation::GetTickCount,
-        Threading::CreateMutexW,
+        Power::*,
+        RemoteDesktop::*,
+        StationsAndDesktops::*,
+        Threading::{CreateMutexW, GetCurrentProcessId},
     },
     UI::Input::KeyboardAndMouse::*,
 };
@@ -53,6 +55,7 @@ pub fn log(text: &str) {
     }
 }
 
+#[cfg(test)]
 pub fn last_input_idle() -> Result<u32, String> {
     // SAFETY: correctly sized LASTINPUTINFO lives until the synchronous call returns.
     unsafe {
@@ -61,11 +64,16 @@ pub fn last_input_idle() -> Result<u32, String> {
         if GetLastInputInfo(&mut info) == 0 {
             return Err(format!("GetLastInputInfo: {}", GetLastError()));
         }
-        Ok(crate::config::idle_millis(GetTickCount(), info.dwTime))
+        Ok(crate::config::idle_millis(
+            windows_sys::Win32::System::SystemInformation::GetTickCount(),
+            info.dwTime,
+        ))
     }
 }
 
 pub fn pulse() -> Result<(), String> {
+    let tick = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount() };
+    crate::activity::expect_own_tick(tick);
     // Relative zero displacement: never read/restore coordinates, click, scroll or press keys.
     // A remote controller may move the pointer concurrently without a stale-coordinate race.
     let input = INPUT {
@@ -76,8 +84,8 @@ pub fn pulse() -> Result<(), String> {
                 dy: 0,
                 mouseData: 0,
                 dwFlags: MOUSEEVENTF_MOVE,
-                time: 0,
-                dwExtraInfo: 0x41574B45,
+                time: tick,
+                dwExtraInfo: keepalive_tag(),
             },
         },
     };
@@ -191,4 +199,26 @@ impl Drop for Instance {
             CloseHandle(self.0);
         }
     }
+}
+
+pub fn keepalive_tag() -> usize {
+    ((unsafe { GetCurrentProcessId() } as usize) << 32) | 0x41574B45
+}
+pub fn last_input_stamp() -> Result<u32, String> {
+    unsafe {
+        let mut info: LASTINPUTINFO = zeroed();
+        info.cbSize = size_of::<LASTINPUTINFO>() as u32;
+        if GetLastInputInfo(&mut info) == 0 {
+            return Err("无法读取输入时间".into());
+        }
+        Ok(info.dwTime)
+    }
+}
+
+pub fn input_held() -> bool {
+    [
+        VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN,
+    ]
+    .iter()
+    .any(|key| unsafe { GetAsyncKeyState(*key as i32) } as u16 & 0x8000 != 0)
 }
